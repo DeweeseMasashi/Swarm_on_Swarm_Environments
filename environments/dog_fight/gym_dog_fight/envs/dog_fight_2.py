@@ -26,7 +26,7 @@ import numpy as np
 
 
 path = 'config.yaml'  # always use slash in packages
-filepath = pkg_resources.resource_filename('gym_to_origin', path)
+filepath = pkg_resources.resource_filename('gym_dog_fight', path)
 config = cfg_load.load(filepath)
 logging.config.dictConfig(config['LOGGING'])
 
@@ -38,14 +38,32 @@ def distance(x1, y1, x2, y2):
     return math.sqrt((x1-x2)*(x1-x2) + (y1 - y2)*(y1 - y2))
 def in_radius(x1, y1, x2, y2, r):
     return distance(x1, y1, x2, y2) < r
+def angleInRange(angle, lower, upper):
+    angle = angle % 360
+    lower = lower % 360
+    upper = upper % 360
 
-class ToOriginEnv(gym.Env):
+    if lower > upper:
+        if angle > lower or angle < upper:
+            return True
+    else:
+        if angle > lower and angle < upper:
+            return True
+    return False
+
+class DogFightEnv2(gym.Env):
     """
     Define a simple Banana environment.
 
     The environment defines which actions can be taken at which point and
     when the agent receives which reward.
     """
+
+    def getActorAngle(self):
+        curr_state = self._get_state()
+        entry_vec_x = self.prev_state[0] - curr_state[0]
+        entry_vec_y = self.prev_state[1] - curr_state[1]
+        return (360 * math.atan2(entry_vec_y, entry_vec_x)) / (2 * math.pi)  
 
     def __init__(self):
         '''
@@ -79,6 +97,12 @@ class ToOriginEnv(gym.Env):
         self.start_y = 5
         self.position = [self.start_x, self.start_y]
 
+        self.enemy_start_x = 0
+        self.enemy_start_y = 0
+
+        self.enemy_position = [self.enemy_start_x, self.enemy_start_y]
+        self.enemy_angle = 0
+
         self.min_angle = 0
         self.max_angle = 360
 
@@ -93,12 +117,10 @@ class ToOriginEnv(gym.Env):
         self.prev_state = self._get_state()
 
         self.curr_episode = -1
-        self.action_episode_memory = []
 
 
         self.init_pyplot()
         self.L = 0.3
-
 
     def init_pyplot(self):
 
@@ -161,15 +183,6 @@ class ToOriginEnv(gym.Env):
                  However, official evaluations of your agent are not allowed to
                  use this for learning.
         """
-        '''
-        if self.is_banana_sold:
-            raise RuntimeError("Episode is done")
-        self.curr_step += 1
-        self._take_action(action)
-        reward = self._get_reward()
-        ob = self._get_state()
-        return ob, reward, self.is_banana_sold, {}
-        '''
         if self.is_done():
             raise RuntimeError("Episode is done")
         self.curr_step += 1
@@ -179,28 +192,9 @@ class ToOriginEnv(gym.Env):
         return ob, reward, self.is_done(), {}
 
     def is_done(self):
-        return self.out_of_bounds or in_radius(self.position[0], self.position[1], 0, 0, self.movement_length)
+        return self.out_of_bounds or in_radius(self.position[0], self.position[1], self.enemy_position[0], self.enemy_position[1], self.movement_length)
 
     def _take_action(self, action):
-        """
-        self.action_episode_memory[self.curr_episode].append(action)
-        self.price = ((float(self.MAX_PRICE) /
-                      (self.action_space.n - 1)) * action)
-
-        chance_to_take = get_chance(self.price)
-        banana_is_sold = (random.random() < chance_to_take)
-
-        if banana_is_sold:
-            self.is_banana_sold = True
-
-        remaining_steps = self.TOTAL_TIME_STEPS - self.curr_step
-        time_is_over = (remaining_steps <= 0)
-        throw_away = time_is_over and not self.is_banana_sold
-        if throw_away:
-            self.is_banana_sold = True  # abuse this a bit
-            self.price = 0.0
-        """
-        self.action_episode_memory[self.curr_episode].append(action)
 
         self.prev_state = self._get_state()[:]
         x_adjustment = math.cos(math.radians(action)) * self.movement_length
@@ -209,18 +203,21 @@ class ToOriginEnv(gym.Env):
         self.position[0] += x_adjustment
         self.position[1] += y_adjustment
 
-        if distance(self.position[0], self.position[1], 0, 0) > distance(self.max_distance, self.max_distance, 0, 0):
+        if distance(self.position[0], self.position[1], self.enemy_position[0], self.enemy_position[1]) > distance(self.max_distance, self.max_distance, self.enemy_position[0], self.enemy_position[1]):
             self.out_of_bounds = True
 
     def _get_reward(self):
-        """Reward is given for a sold banana."""
         if self.out_of_bounds:
             return -10
-        elif in_radius(self.position[0], self.position[1], 0, 0, self.movement_length):
-            return 10
+        elif in_radius(self.position[0], self.position[1], self.enemy_position[0], self.enemy_position[1], self.movement_length):
+            if angleInRange(self.getActorAngle(), self.enemy_angle - 91, self.enemy_angle + 91):
+                return 0
+            else:
+                return 10
+
         else:
             curr_state = self._get_state()
-            return ((distance(self.prev_state[0], self.prev_state[1], 0, 0) - distance(curr_state[0], curr_state[1], 0, 0))/(distance(self.start_x, self.start_y, 0, 0))) * 10
+            return ((distance(self.prev_state[0], self.prev_state[1], self.enemy_position[0], self.enemy_position[1]) - distance(curr_state[0], curr_state[1], self.enemy_position[0], self.enemy_position[1]))/(distance(self.start_x, self.start_y, self.enemy_position[0], self.enemy_position[1]))) * 10
         '''
         else:
             return 0
@@ -236,10 +233,11 @@ class ToOriginEnv(gym.Env):
         """
         self.curr_step = -1
         self.curr_episode += 1
-        self.action_episode_memory.append([])
         self.out_of_bounds = False
         self.position[0] = self.start_x
         self.position[1] = self.start_y
+        self.enemy_position[0] = self.enemy_start_x
+        self.enemy_position[1] = self.enemy_start_y
         return self._get_state()
 
     def _render(self, mode='human', close=False):
